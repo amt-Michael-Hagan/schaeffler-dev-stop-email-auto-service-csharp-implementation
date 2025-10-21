@@ -4,13 +4,29 @@ using System.IO;
 using System.Net;
 using System.Text;
 using System.Threading;
+using Azure.Core;
+using Azure.Identity;
+using Microsoft.Graph;
 using Newtonsoft.Json;
 
 namespace EmailAutomationLegacy.Services
 {
     public class TokenManager
     {
+        private readonly ClientSecretCredential _credential;
+        private readonly string[] _scopes = new[] { "https://graph.microsoft.com/.default" };
+        private AccessToken? _currentToken;
+        private DateTimeOffset _tokenExpiresOn;
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(typeof(TokenManager));
+
+        public TokenManager()
+        {
+            _credential = new ClientSecretCredential(
+                AppSettings.TenantId,
+                AppSettings.ClientId,
+                AppSettings.ClientSecret
+            );
+        }
         
         private string _cachedToken;
         private DateTime _tokenExpiry;
@@ -18,17 +34,27 @@ namespace EmailAutomationLegacy.Services
 
         public string GetAccessToken()
         {
-            lock (_tokenLock)
+            // Return cached token if it's still valid
+            if (_currentToken.HasValue && DateTimeOffset.UtcNow < _tokenExpiresOn)
             {
-                // Return cached token if still valid (with 5 minute buffer)
-                if (!string.IsNullOrEmpty(_cachedToken) && DateTime.UtcNow < _tokenExpiry.AddMinutes(-5))
-                {
-                    return _cachedToken;
-                }
-
-                // Request new token
-                return RequestNewToken();
+                return _currentToken.Value.Token;
             }
+
+            // Request a new token
+            _currentToken = _credential.GetToken(
+                new TokenRequestContext(_scopes),
+                CancellationToken.None
+            );
+
+            // Set token expiration (with 5 minute buffer)
+            _tokenExpiresOn = _currentToken.Value.ExpiresOn.AddMinutes(-5);
+
+            return _currentToken.Value.Token;
+        }
+        
+        public GraphServiceClient GetGraphClient()
+        {
+            return new GraphServiceClient(_credential, _scopes);
         }
 
         private string RequestNewToken()

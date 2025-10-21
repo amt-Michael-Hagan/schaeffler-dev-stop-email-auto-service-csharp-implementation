@@ -2,6 +2,7 @@ using System;
 using System.Configuration;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using EmailAutomationLegacy.Services;
 
 namespace EmailAutomationLegacy
@@ -10,7 +11,7 @@ namespace EmailAutomationLegacy
     {
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(typeof(Program));
 
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             try
             {
@@ -33,7 +34,7 @@ namespace EmailAutomationLegacy
 
                 // Test connection first
                 Console.WriteLine("🔍 Testing connection...");
-                if (!emailProcessor.TestConnection())
+                if (await emailProcessor.TestConnection())
                 {
                     Console.WriteLine("❌ Connection test failed. Exiting.");
                     Environment.Exit(1);

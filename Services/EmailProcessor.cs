@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Web;
 using Newtonsoft.Json;
 using EmailAutomationLegacy.Models;
+using Microsoft.Graph;
 
 namespace EmailAutomationLegacy.Services
 {
@@ -15,50 +17,85 @@ namespace EmailAutomationLegacy.Services
         private readonly TokenManager _tokenManager;
         private readonly GraphApiClient _graphClient;
         private TrackingData _trackingData;
+        private readonly GraphServiceClient _graphServiceClient;
 
         public EmailProcessor(TokenManager tokenManager)
         {
             _tokenManager = tokenManager;
             _graphClient = new GraphApiClient(_tokenManager);
             _trackingData = LoadTrackingData();
+            _graphServiceClient = _tokenManager.GetGraphClient();
         }
 
-        public bool TestConnection()
+        // public bool TestConnection()
+        // {
+        //     try
+        //     {
+        //         log.Info("Testing Microsoft Graph API connection...");
+        //         
+        //         // Test token acquisition
+        //         var token = _tokenManager.GetAccessToken();
+        //         if (string.IsNullOrEmpty(token))
+        //         {
+        //             log.Error("Failed to obtain access token");
+        //             return false;
+        //         }
+        //
+        //         // Test API call - get user info
+        //         var userEndpoint = $"users/{AppSettings.TargetEmail}";
+        //         var user = _graphClient.Get<GraphUser>(userEndpoint);
+        //         
+        //         if (user == null)
+        //         {
+        //             log.Error("Failed to retrieve user information");
+        //             return false;
+        //         }
+        //
+        //         log.Info($"Successfully connected. User: {user.DisplayName} ({user.Mail ?? user.UserPrincipalName})");
+        //
+        //         // Test mailbox access
+        //         var messagesEndpoint = $"users/{AppSettings.TargetEmail}/messages?$top=1";
+        //         var messagesResponse = _graphClient.GetPaged<GraphMessage>(messagesEndpoint);
+        //         
+        //         log.Info($"Mailbox access confirmed. Found {messagesResponse.Value?.Count ?? 0} messages in test query");
+        //         return true;
+        //     }
+        //     catch (Exception ex)
+        //     {
+        //         log.Error("Connection test failed", ex);
+        //         return false;
+        //     }
+        // }
+        
+        public async Task<bool> TestConnection()
         {
             try
             {
                 log.Info("Testing Microsoft Graph API connection...");
-                
-                // Test token acquisition
-                var token = _tokenManager.GetAccessToken();
-                if (string.IsNullOrEmpty(token))
-                {
-                    log.Error("Failed to obtain access token");
-                    return false;
-                }
-
-                // Test API call - get user info
-                var userEndpoint = $"users/{AppSettings.TargetEmail}";
-                var user = _graphClient.Get<GraphUser>(userEndpoint);
-                
-                if (user == null)
-                {
-                    log.Error("Failed to retrieve user information");
-                    return false;
-                }
+        
+                // For v5.x of Microsoft.Graph
+                var user = await _graphServiceClient.Users[AppSettings.TargetEmail].GetAsync();
 
                 log.Info($"Successfully connected. User: {user.DisplayName} ({user.Mail ?? user.UserPrincipalName})");
 
                 // Test mailbox access
-                var messagesEndpoint = $"users/{AppSettings.TargetEmail}/messages?$top=1";
-                var messagesResponse = _graphClient.GetPaged<GraphMessage>(messagesEndpoint);
-                
-                log.Info($"Mailbox access confirmed. Found {messagesResponse.Value?.Count ?? 0} messages in test query");
+                var messages = await _graphServiceClient.Users[AppSettings.TargetEmail].Messages
+                    .GetAsync();
+
+                log.Info($"Mailbox access confirmed. Found  messages in test query");
                 return true;
+            }
+            catch (ServiceException ex)
+            {
+                log.Error("Connection test failed", ex);
+                // log.Error($"Status: {ex.StatusCode}");
+                log.Error($"Response: {ex.ResponseHeaders}");
+                log.Error($"Message: {ex.Message}");
+                return false;
             }
             catch (Exception ex)
             {
-                log.Error("Connection test failed", ex);
+                log.Error("Unexpected error during connection test", ex);
                 return false;
             }
         }
