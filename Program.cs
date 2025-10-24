@@ -1,7 +1,6 @@
 using System;
 using System.Configuration;
 using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
 using EmailAutomationLegacy.Services;
 
@@ -32,19 +31,10 @@ namespace EmailAutomationLegacy
                 var tokenManager = new TokenManager();
                 var emailProcessor = new EmailProcessor(tokenManager);
 
-                // Test connection first
-                Console.WriteLine("🔍 Testing connection...");
-                if (await emailProcessor.TestConnection())
-                {
-                    Console.WriteLine("❌ Connection test failed. Exiting.");
-                    Environment.Exit(1);
-                }
-
-                Console.WriteLine("✅ Connection successful!");
                 Console.WriteLine("📧 Starting email processing...");
 
                 // Process emails
-                var result = emailProcessor.ProcessEmails();
+                var result = await emailProcessor.ProcessEmailsLegacy();
                 
                 // Display results
                 Console.WriteLine("\n" + new string('=', 60));

@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
@@ -32,101 +30,11 @@ namespace EmailAutomationLegacy.Services
         {
             _tokenManager = tokenManager;
             _graphClient = new GraphApiClient(_tokenManager);
-            // _trackingData = LoadTrackingData();
-
-            var handler = new HttpClientHandler();
-
-            var httpClient = new HttpClient(handler, disposeHandler: true)
-            {
-                Timeout = TimeSpan.FromSeconds(100)
-            };
-
-            var authProvider = new SimpleAuthenticationProvider(tokenManager);
-
-            _graphServiceClient = new GraphServiceClient(httpClient, authProvider);
+            _trackingData = LoadTrackingData();
+            _graphServiceClient = _tokenManager.GetGraphClient();
         }
 
-        /*public bool TestConnection()
-        {
-            try
-            {
-                log.Info("Testing Microsoft Graph API connection...");
-
-                // Test token acquisition
-                var token = _tokenManager.GetAccessToken();
-                if (string.IsNullOrEmpty(token))
-                {
-                    log.Error("Failed to obtain access token");
-                    return false;
-                }
-
-                // Test API call - get user info
-                var userEndpoint = $"users/{AppSettings.TargetEmail}";
-                var user = _graphClient.Get<GraphUser>(userEndpoint);
-
-                if (user == null)
-                {
-                    log.Error("Failed to retrieve user information");
-                    return false;
-                }
-
-                log.Info($"Successfully connected. User: {user.DisplayName} ({user.Mail ?? user.UserPrincipalName})");
-
-                // Test mailbox access
-                var messagesEndpoint = $"users/{AppSettings.TargetEmail}/messages?$top=1";
-                var messagesResponse = _graphClient.GetPaged<GraphMessage>(messagesEndpoint);
-
-                log.Info($"Mailbox access confirmed. Found {messagesResponse.Value?.Count ?? 0} messages in test query");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                log.Error("Connection test failed", ex);
-                return false;
-            }
-
-        }*/
-        /*public async Task<bool> TestConnection()
-        {
-            try
-            {
-                log.Info("Testing Microsoft Graph API connection...");
-
-                // Test mailbox access
-                var messages = await _graphServiceClient.Users[AppSettings.TargetEmail].Messages.GetAsync();
-
-                log.Info($"Mailbox access confirmed. Found {messages.Value.Count} messages in test query");
-
-                var folders = await _graphServiceClient.Users[AppSettings.TargetEmail].MailFolders
-                    .GetAsync();
-
-                log.Info($"Mail folders access confirmed. Found {folders.Value.Count} mail folders in test query");
-
-                foreach (var mailFolder in folders.Value)
-                {
-                    log.Info($"Mail folder: {mailFolder.DisplayName}");
-                }
-                return true;
-            }
-            catch (ServiceException ex) when (ex.ResponseStatusCode == 403)
-            {
-                log.Error("Permission denied. Please check if the application has the required API permissions in Azure AD.");
-                log.Error($"Required permissions: Mail.Read, User.Read (Application permissions)");
-                log.Error($"Error details: {ex.Message}");
-                IEnumerable<string> requestId = new List<string>();
-                if (ex.ResponseHeaders?.TryGetValues("request-id", out requestId) == true)
-                {
-                    log.Error($"Request ID: {string.Join(", ", requestId)}");
-                }
-                return false;
-            }
-            catch (Exception ex)
-            {
-                log.Error("Connection test failed", ex);
-                return false;
-            }
-        }*/
-        /*public ProcessingResult ProcessEmails()
+        public ProcessingResult ProcessEmails()
         {
             var result = new ProcessingResult();
 
@@ -321,7 +229,7 @@ namespace EmailAutomationLegacy.Services
         {
             try
             {
-                var json = JsonConvert.SerializeObject(_trackingData, Formatting.Indented);
+                var json = JsonConvert.SerializeObject(_trackingData, Newtonsoft.Json.Formatting.Indented);
                 File.WriteAllText(AppSettings.TrackingFile, json);
                 log.Info("Tracking data saved successfully");
             }
@@ -330,8 +238,6 @@ namespace EmailAutomationLegacy.Services
                 log.Error($"Failed to save tracking file: {ex.Message}", ex);
             }
         }
-
-        */
 
         // File: `Services/EmailProcessor.cs`
 // Language: csharp
@@ -359,22 +265,27 @@ namespace EmailAutomationLegacy.Services
             {
                 log.Info("Starting legacy-style email processing (Graph SDK)");
 
-                // Validate paths
+                // Ensure output directory exists
                 if (!Directory.Exists(AppSettings.OutputPathGood))
                 {
-                    log.Error($"Output path does not exist: {AppSettings.OutputPathGood}");
-                    return result;
+                    Directory.CreateDirectory(AppSettings.OutputPathGood);
+                    log.Info($"Created output directory: {AppSettings.OutputPathGood}");
                 }
 
                 var logDir = Path.GetDirectoryName(AppSettings.LogFile) ?? AppSettings.LogFile;
                 if (!Directory.Exists(logDir))
                 {
-                    log.Error($"Log directory does not exist: {logDir}");
-                    return result;
+                    Directory.CreateDirectory(logDir);
+                    log.Info($"Created log directory: {logDir}");
                 }
 
                 // Load allowed senders/domains and blocked extensions
                 var allowed = LoadAllowedSenders();
+                if (allowed == null)
+                {
+                    log.Error("Failed to load allowed senders - LoadAllowedSenders returned null");
+                    return result;
+                }
                 log.Info($"Loaded {allowed.Count} allowed senders/domains");
                 var blockedExts = ParseBlockedExtensions();
 
@@ -397,11 +308,11 @@ namespace EmailAutomationLegacy.Services
                 // Query messages in the import folder via Graph SDK
                 var messagesResp = await _graphServiceClient
                     .Users[AppSettings.TargetEmail]
-                    .MailFolders[importFolderId]
+                    //.MailFolders[importFolderId]
                     .Messages
                     .GetAsync(config =>
                     {
-                        config.QueryParameters.Filter = filter;
+                        //config.QueryParameters.Filter = filter;
                         config.QueryParameters.Select = new[]
                             { "id", "subject", "from", "receivedDateTime", "hasAttachments", "parentFolderId" };
                         config.QueryParameters.Orderby = new[] { "receivedDateTime desc" };
@@ -413,7 +324,6 @@ namespace EmailAutomationLegacy.Services
 
                 if (messages.Count == 0) return result;
 
-                // Legacy: do not filter out sent items or same-mailbox messages (match EmailProcessorLegacy)
                 var incoming = messages.ToList();
                 log.Info($"Processing {incoming.Count} messages");
                 result.EmailsProcessed = incoming.Count;

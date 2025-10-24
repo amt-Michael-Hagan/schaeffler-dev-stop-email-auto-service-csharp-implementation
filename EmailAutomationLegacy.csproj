@@ -193,7 +193,6 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="AppSettings.cs" />
-    <Compile Include="Services\EmailProcessorLegacy.cs" />
     <Compile Include="Services\TokenManager.cs" />
     <Compile Include="Services\GraphApiClient.cs" />
     <Compile Include="Services\EmailProcessor.cs" />
@@ -203,6 +202,11 @@
   <ItemGroup>
     <None Include="App.config" />
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Emails.xml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
