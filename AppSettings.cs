@@ -17,6 +17,14 @@ namespace EmailAutomationLegacy
         public static string TrackingFile => GetSetting("TrackingFile", "./processed_emails.json");
         public static int RetryAttempts => GetIntSetting("RetryAttempts", 3);
         public static int RetryDelayMs => GetIntSetting("RetryDelayMs", 2000);
+        public static string OutputPathGood  => "/ExternalImport";
+        public static string LogFile => "";
+        public static string InboxImportSubDir => "ExternalTodo";
+        public static string InboxOldSubDir => "ExternalOld";
+        public static bool LogAttachments { get; set; } = true;
+        public static string LogFileAttachments => "";
+        public static string LogFileBlockedFiles => "";
+        public static string BlockedFiles => "";
 
         private static string GetSetting(string key, string defaultValue = null)
         {
