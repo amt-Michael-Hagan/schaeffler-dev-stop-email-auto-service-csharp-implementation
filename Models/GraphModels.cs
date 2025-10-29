@@ -105,12 +105,12 @@ namespace EmailAutomationLegacy.Models
         public int SkippedAttachments { get; set; }
     }
 
-    public class TrackingData
+    public class ProcessedEmailAttachmentTracker
     {
         public Dictionary<string, object> Emails { get; set; }
         public Dictionary<string, AttachmentInfo> Attachments { get; set; }
 
-        public TrackingData()
+        public ProcessedEmailAttachmentTracker()
         {
             Emails = new Dictionary<string, object>();
             Attachments = new Dictionary<string, AttachmentInfo>();

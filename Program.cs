@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Configuration;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using EmailAutomationLegacy.Services;
 
@@ -34,7 +36,7 @@ namespace EmailAutomationLegacy
                 Console.WriteLine("📧 Starting email processing...");
 
                 // Process emails
-                var result = await emailProcessor.ProcessEmailsLegacy();
+                var result = await emailProcessor.ProcessEmailsWithGraphAsync(new Dictionary<string, string>(), "");
                 
                 // Display results
                 Console.WriteLine("\n" + new string('=', 60));
