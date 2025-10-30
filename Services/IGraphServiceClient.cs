@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Graph.Users.Item.Messages.Item.Move;
 
 namespace EmailAutomationLegacy.Services
 {
@@ -12,6 +13,7 @@ namespace EmailAutomationLegacy.Services
         Task<IList<Attachment>> GetAttachmentsAsync(string messageId);
         Task<MessageCollectionResponse> ReadEmailMessages(string folderId, string filter);
         string GetFolderIdByDisplayName(string displayName);
+        Task MoveProcessedMails(string messageId, MovePostRequestBody moveBody);
     }
 
     public class GraphClient : IGraphServiceClient
@@ -65,6 +67,11 @@ namespace EmailAutomationLegacy.Services
             }
 
             return null;
+        }
+
+        public async Task MoveProcessedMails(string messageId, MovePostRequestBody moveBody)
+        {
+            await _graphServiceClient.Users[AppSettings.TargetEmail].Messages[messageId].Move.PostAsync(moveBody);
         }
 
         public async Task<MessageCollectionResponse> ReadEmailMessages(string folderId, string filter)

@@ -7,14 +7,15 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Xml;
 using EmailAutomationLegacy.Models;
+using Microsoft.Graph.Users.Item.Messages.Item.Move;
 using AttachmentInfo = EmailAutomationLegacy.Models.AttachmentInfo;
 
 namespace EmailAutomationLegacy.Services
 {
     public class EmailProcessor
     {
-        private ProcessedEmailAttachmentTracker _trackingData;
-        public readonly IGraphServiceClient _graphServiceClient;
+        private readonly ProcessedEmailAttachmentTracker _trackingData;
+        private readonly IGraphServiceClient _graphServiceClient;
 
         public EmailProcessor(IGraphServiceClient serviceClient)
         {
@@ -264,22 +265,22 @@ namespace EmailAutomationLegacy.Services
             return Path.Combine(directory, uniquePrefix + fileName);
         }
 
-        /*        private async Task MoveProcessedMails(string oldFolderId, List<string> processedMessageIds)
+        private async Task MoveProcessedMails(string oldFolderId, List<string> processedMessageIds)
+        {
+            foreach (var messageId in processedMessageIds)
+            {
+                try
                 {
-                    foreach (var messageId in processedMessageIds)
-                    {
-                        try
-                        {
-                            var moveBody = new MovePostRequestBody { DestinationId = oldFolderId };
-                            await _graphServiceClient.Users[AppSettings.TargetEmail].Messages[messageId].Move.PostAsync(moveBody);
-                            Console.WriteLine($"Moved message {messageId} to folder id {oldFolderId}");
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Failed to move message {messageId}: {ex.Message}");
-                        }
-                    }
-                }*/
+                    var moveBody = new MovePostRequestBody { DestinationId = oldFolderId };
+                    await _graphServiceClient.MoveProcessedMails(messageId, moveBody);
+                    Console.WriteLine($"Moved message {messageId} to folder id {oldFolderId}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Failed to move message {messageId}: {ex.Message}");
+                }
+            }
+        }
 
         private HashSet<string> LoadAllowedSenders()
         {

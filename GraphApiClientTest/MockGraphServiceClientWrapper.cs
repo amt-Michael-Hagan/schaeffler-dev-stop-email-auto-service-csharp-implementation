@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using EmailAutomationLegacy.Services;
 using Microsoft.Graph.Models;
+using Microsoft.Graph.Users.Item.Messages.Item.Move;
 
 namespace GraphApiClientTest
 {
@@ -194,6 +195,13 @@ namespace GraphApiClientTest
                 string.Equals(f.DisplayName, displayName, StringComparison.OrdinalIgnoreCase));
 
             return folder?.Id ?? string.Empty;
+        }
+
+        public Task MoveProcessedMails(string messageId, MovePostRequestBody moveBody)
+        {
+            // Just track the move operation
+            MovedMessages.Add($"{messageId}:{moveBody?.DestinationId ?? "no-destination"}");
+            return Task.CompletedTask;
         }
     }
 
