@@ -193,8 +193,8 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="AppSettings.cs" />
+    <Compile Include="Services\IGraphServiceClient.cs" />
     <Compile Include="Services\TokenManager.cs" />
-    <Compile Include="Services\GraphApiClient.cs" />
     <Compile Include="Services\EmailProcessor.cs" />
     <Compile Include="Models\GraphModels.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

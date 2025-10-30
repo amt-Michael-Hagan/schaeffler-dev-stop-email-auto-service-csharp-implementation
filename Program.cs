@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Configuration;
 using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
 using EmailAutomationLegacy.Services;
 
@@ -31,7 +30,7 @@ namespace EmailAutomationLegacy
 
                 // Initialize services
                 var tokenManager = new TokenManager();
-                var emailProcessor = new EmailProcessor(tokenManager);
+                var emailProcessor = new EmailProcessor(new GraphClient(tokenManager));
 
                 Console.WriteLine("📧 Starting email processing...");
 

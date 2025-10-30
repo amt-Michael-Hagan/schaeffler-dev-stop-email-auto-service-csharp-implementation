@@ -1,29 +1,25 @@
-using Microsoft.Graph;
 using Microsoft.Graph.Models;
-using Microsoft.Graph.Users.Item.Messages.Item.Move;
 using Newtonsoft.Json;
-using EmailAutomationLegacy.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Xml;
+using EmailAutomationLegacy.Models;
 using AttachmentInfo = EmailAutomationLegacy.Models.AttachmentInfo;
 
 namespace EmailAutomationLegacy.Services
 {
     public class EmailProcessor
     {
-        private readonly TokenManager _tokenManager;
         private ProcessedEmailAttachmentTracker _trackingData;
-        private readonly GraphServiceClient _graphServiceClient;
+        public readonly IGraphServiceClient _graphServiceClient;
 
-        public EmailProcessor(TokenManager tokenManager)
+        public EmailProcessor(IGraphServiceClient serviceClient)
         {
-            _tokenManager = tokenManager;
             _trackingData = LoadTrackingData();
-            _graphServiceClient = _tokenManager.GetGraphClient();
+            _graphServiceClient = serviceClient;
         }
 
 
@@ -83,7 +79,7 @@ namespace EmailAutomationLegacy.Services
                 );
 
                 // Move processed mails
-                await MoveProcessedMails(oldFolderId, processedIds);
+                //await MoveProcessedMails(oldFolderId, processedIds);
 
 
                 Console.WriteLine("Email processing completed successfully.");
@@ -115,18 +111,7 @@ namespace EmailAutomationLegacy.Services
             var filter = $"receivedDateTime ge {hoursAgo:yyyy-MM-ddTHH:mm:ss.fffZ} and hasAttachments eq true";
 
             // Query messages in the import folder via Graph SDK
-            var messagesResp = await _graphServiceClient
-                .Users[AppSettings.TargetEmail]
-                .MailFolders[importFolderId]
-                .Messages
-                .GetAsync(config =>
-                {
-                    config.QueryParameters.Filter = filter;
-                    config.QueryParameters.Select = new[]
-                        { "id", "subject", "from", "receivedDateTime", "hasAttachments", "parentFolderId" };
-                    config.QueryParameters.Orderby = new[] { "receivedDateTime desc" };
-                    config.QueryParameters.Top = 999;
-                });
+            var messagesResp = await _graphServiceClient.ReadEmailMessages(oldFolderId, filter);
             return (oldFolderId, messagesResp);
         }
 
@@ -207,13 +192,7 @@ namespace EmailAutomationLegacy.Services
 
         private async Task<IList<Attachment>> GetAttachmentsAsync(string messageId)
         {
-            var response = await _graphServiceClient
-                .Users[AppSettings.TargetEmail]
-                .Messages[messageId]
-                .Attachments
-                .GetAsync();
-
-            return response?.Value;
+            return await _graphServiceClient.GetAttachmentsAsync(messageId);
         }
 
         private static void LogSkippedAttachment(ProcessingResult result, string name)
@@ -285,22 +264,22 @@ namespace EmailAutomationLegacy.Services
             return Path.Combine(directory, uniquePrefix + fileName);
         }
 
-        private async Task MoveProcessedMails(string oldFolderId, List<string> processedMessageIds)
-        {
-            foreach (var messageId in processedMessageIds)
-            {
-                try
+        /*        private async Task MoveProcessedMails(string oldFolderId, List<string> processedMessageIds)
                 {
-                    var moveBody = new MovePostRequestBody { DestinationId = oldFolderId };
-                    await _graphServiceClient.Users[AppSettings.TargetEmail].Messages[messageId].Move.PostAsync(moveBody);
-                    Console.WriteLine($"Moved message {messageId} to folder id {oldFolderId}");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Failed to move message {messageId}: {ex.Message}");
-                }
-            }
-        }
+                    foreach (var messageId in processedMessageIds)
+                    {
+                        try
+                        {
+                            var moveBody = new MovePostRequestBody { DestinationId = oldFolderId };
+                            await _graphServiceClient.Users[AppSettings.TargetEmail].Messages[messageId].Move.PostAsync(moveBody);
+                            Console.WriteLine($"Moved message {messageId} to folder id {oldFolderId}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Failed to move message {messageId}: {ex.Message}");
+                        }
+                    }
+                }*/
 
         private HashSet<string> LoadAllowedSenders()
         {
@@ -366,35 +345,7 @@ namespace EmailAutomationLegacy.Services
 
         private string GetFolderIdByDisplayName(string displayName)
         {
-            if (string.IsNullOrWhiteSpace(displayName)) return null;
-            try
-            {
-                var foldersResp = _graphServiceClient.Users[AppSettings.TargetEmail].MailFolders.GetAsync().GetAwaiter()
-                    .GetResult();
-                var folders = foldersResp?.Value ?? new List<MailFolder>();
-
-                var found = folders.FirstOrDefault(f =>
-                    string.Equals(f.DisplayName, displayName, StringComparison.OrdinalIgnoreCase));
-                if (found != null) return found.Id;
-
-                var inbox = folders.FirstOrDefault(f =>
-                    string.Equals(f.DisplayName, "Inbox", StringComparison.OrdinalIgnoreCase));
-                if (inbox != null)
-                {
-                    var childResp = _graphServiceClient.Users[AppSettings.TargetEmail].MailFolders[inbox.Id]
-                        .ChildFolders.GetAsync().GetAwaiter().GetResult();
-                    var children = childResp?.Value ?? new List<MailFolder>();
-                    var sub = children.FirstOrDefault(f =>
-                        string.Equals(f.DisplayName, displayName, StringComparison.OrdinalIgnoreCase));
-                    if (sub != null) return sub.Id;
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"GetFolderIdByDisplayName failed for '{displayName}': {ex.Message}");
-            }
-
-            return null;
+            return _graphServiceClient.GetFolderIdByDisplayName(displayName);
         }
 
         //Todo: Save data using file hashes instead.
