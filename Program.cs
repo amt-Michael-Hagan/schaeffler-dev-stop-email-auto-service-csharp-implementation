@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Configuration;
 using System.IO;
 using System.Threading.Tasks;
+using EmailAutomationLegacy.Models;
 using EmailAutomationLegacy.Services;
+using System.Text.Json;
 
 namespace EmailAutomationLegacy
 {
@@ -30,7 +32,8 @@ namespace EmailAutomationLegacy
 
                 // Initialize services
                 var tokenManager = new TokenManager();
-                var emailProcessor = new EmailProcessor(new GraphClient(tokenManager));
+                var trackingData = LoadTrackingData();  
+                var emailProcessor = new EmailProcessor(new GraphClient(tokenManager), trackingData);
 
                 Console.WriteLine("📧 Starting email processing...");
 
@@ -93,6 +96,31 @@ namespace EmailAutomationLegacy
             }
 
             return true;
+        }
+        
+        private static ProcessedEmailAttachmentTracker LoadTrackingData()
+        {
+            try
+            {
+                if (File.Exists(AppSettings.TrackingFile))
+                {
+                    var json = File.ReadAllText(AppSettings.TrackingFile);
+                    if (string.IsNullOrWhiteSpace(json))
+                    {
+                        return new ProcessedEmailAttachmentTracker();
+                    }
+
+                    var data = JsonSerializer.Deserialize<ProcessedEmailAttachmentTracker>(json);
+                    Console.WriteLine($"Loaded tracking data: {data.Attachments.Count} attachments previously processed");
+                    return data;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to load tracking file, using empty state: {ex.Message}");
+            }
+
+            return new ProcessedEmailAttachmentTracker();
         }
     }
 }

@@ -1,5 +1,4 @@
 using Microsoft.Graph.Models;
-using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -9,6 +8,7 @@ using System.Xml;
 using EmailAutomationLegacy.Models;
 using Microsoft.Graph.Users.Item.Messages.Item.Move;
 using AttachmentInfo = EmailAutomationLegacy.Models.AttachmentInfo;
+using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace EmailAutomationLegacy.Services
 {
@@ -17,9 +17,9 @@ namespace EmailAutomationLegacy.Services
         private readonly ProcessedEmailAttachmentTracker _trackingData;
         private readonly IGraphServiceClient _graphServiceClient;
 
-        public EmailProcessor(IGraphServiceClient serviceClient)
+        public EmailProcessor(IGraphServiceClient serviceClient, ProcessedEmailAttachmentTracker trackingData)
         {
-            _trackingData = LoadTrackingData();
+            _trackingData = trackingData;
             _graphServiceClient = serviceClient;
         }
 
@@ -58,7 +58,7 @@ namespace EmailAutomationLegacy.Services
                 }
 
                 // Fetch emails and attachments
-                (string oldFolderId, MessageCollectionResponse messagesResponse) = await ReadEmailMessages(importFolderId);
+                var (_, messagesResponse) = await ReadEmailMessages(importFolderId);
 
                 var messages = messagesResponse?.Value?.ToList() ?? new List<Message>();
                 Console.WriteLine($"Found {messages.Count} messages with attachments in import folder.");
@@ -116,30 +116,6 @@ namespace EmailAutomationLegacy.Services
             return (oldFolderId, messagesResp);
         }
 
-        private ProcessedEmailAttachmentTracker LoadTrackingData()
-        {
-            try
-            {
-                if (File.Exists(AppSettings.TrackingFile))
-                {
-                    var json = File.ReadAllText(AppSettings.TrackingFile);
-                    if (string.IsNullOrWhiteSpace(json))
-                    {
-                        return new ProcessedEmailAttachmentTracker();
-                    }
-
-                    var data = JsonConvert.DeserializeObject<ProcessedEmailAttachmentTracker>(json);
-                    Console.WriteLine($"Loaded tracking data: {data.Attachments.Count} attachments previously processed");
-                    return data;
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Failed to load tracking file, using empty state: {ex.Message}");
-            }
-
-            return new ProcessedEmailAttachmentTracker();
-        }
 
         private async Task ProcessEmailAttachments(
             ProcessingResult result,
@@ -354,7 +330,7 @@ namespace EmailAutomationLegacy.Services
         {
             try
             {
-                var json = JsonConvert.SerializeObject(_trackingData, Newtonsoft.Json.Formatting.Indented);
+                var json = JsonSerializer.Serialize(_trackingData);
                 File.WriteAllText(AppSettings.TrackingFile, json);
                 Console.WriteLine("Tracking data saved successfully");
             }
