@@ -260,6 +260,7 @@ namespace GraphApiClientTest
                 "user1@trusted.com",
                 true
             );
+            
             var message2 = MockGraphServiceClientWrapper.CreateTestMessage(
                 "msg-multi2",
                 "Second Email",

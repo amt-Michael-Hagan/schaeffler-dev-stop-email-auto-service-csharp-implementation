@@ -176,16 +176,9 @@ namespace GraphApiClientTest
                 ? MockMessages[folderId]
                 : new List<Message>();
 
-            // Apply basic filtering if needed (simplified for testing)
-            var filteredMessages = messages.Where(m =>
-                string.IsNullOrEmpty(filter) ||
-                (m.Subject?.Contains(filter) ?? false) ||
-                (m.From?.EmailAddress?.Address?.Contains(filter) ?? false)
-            ).ToList();
-
             return Task.FromResult(new MessageCollectionResponse
             {
-                Value = filteredMessages
+                Value = messages
             });
         }
 
@@ -194,7 +187,7 @@ namespace GraphApiClientTest
             var folder = MockMailFolders.FirstOrDefault(f =>
                 string.Equals(f.DisplayName, displayName, StringComparison.OrdinalIgnoreCase));
 
-            return folder?.Id ?? string.Empty;
+            return folder?.Id;
         }
 
         public Task MoveProcessedMails(string messageId, MovePostRequestBody moveBody)
