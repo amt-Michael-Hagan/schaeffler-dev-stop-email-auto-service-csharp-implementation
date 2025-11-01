@@ -1,277 +1,343 @@
+using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Web;
-using Newtonsoft.Json;
+using System.Threading.Tasks;
+using System.Xml;
 using EmailAutomationLegacy.Models;
+using Microsoft.Graph.Users.Item.Messages.Item.Move;
+using AttachmentInfo = EmailAutomationLegacy.Models.AttachmentInfo;
+using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace EmailAutomationLegacy.Services
 {
     public class EmailProcessor
     {
-        private static readonly log4net.ILog log = log4net.LogManager.GetLogger(typeof(EmailProcessor));
-        
-        private readonly TokenManager _tokenManager;
-        private readonly GraphApiClient _graphClient;
-        private TrackingData _trackingData;
+        private readonly ProcessedEmailAttachmentTracker _trackingData;
+        private readonly IGraphServiceClient _graphServiceClient;
 
-        public EmailProcessor(TokenManager tokenManager)
+        public EmailProcessor(IGraphServiceClient serviceClient, ProcessedEmailAttachmentTracker trackingData)
         {
-            _tokenManager = tokenManager;
-            _graphClient = new GraphApiClient(_tokenManager);
-            _trackingData = LoadTrackingData();
+            _trackingData = trackingData;
+            _graphServiceClient = serviceClient;
         }
 
-        public bool TestConnection()
-        {
-            try
-            {
-                log.Info("Testing Microsoft Graph API connection...");
-                
-                // Test token acquisition
-                var token = _tokenManager.GetAccessToken();
-                if (string.IsNullOrEmpty(token))
-                {
-                    log.Error("Failed to obtain access token");
-                    return false;
-                }
 
-                // Test API call - get user info
-                var userEndpoint = $"users/{AppSettings.TargetEmail}";
-                var user = _graphClient.Get<GraphUser>(userEndpoint);
-                
-                if (user == null)
-                {
-                    log.Error("Failed to retrieve user information");
-                    return false;
-                }
-
-                log.Info($"Successfully connected. User: {user.DisplayName} ({user.Mail ?? user.UserPrincipalName})");
-
-                // Test mailbox access
-                var messagesEndpoint = $"users/{AppSettings.TargetEmail}/messages?$top=1";
-                var messagesResponse = _graphClient.GetPaged<GraphMessage>(messagesEndpoint);
-                
-                log.Info($"Mailbox access confirmed. Found {messagesResponse.Value?.Count ?? 0} messages in test query");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                log.Error("Connection test failed", ex);
-                return false;
-            }
-        }
-
-        public ProcessingResult ProcessEmails()
+        public async Task<ProcessingResult> ProcessEmailsWithGraphAsync(
+            Dictionary<string, string> emailList, string logFilePath)
         {
             var result = new ProcessingResult();
-            
+
             try
             {
-                log.Info("Starting email processing...");
-                log.Info($"Target mailbox: {AppSettings.TargetEmail}");
-                log.Info($"Fetching emails from last {AppSettings.HoursToFetch} hours");
+                Console.WriteLine("Starting email processing with Microsoft Graph...");
 
-                // Calculate date filter
-                var hoursAgo = DateTime.UtcNow.AddHours(-AppSettings.HoursToFetch);
-                var filterDate = hoursAgo.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+                EnsureDirectoryExists(AppSettings.OutputPathGood, "Output");
+                var logDir = EnsureDirectoryExists(Path.GetDirectoryName(AppSettings.LogFile) ?? AppSettings.LogFile, "Log");
 
-                // Build filter for emails with attachments
-                var filter = $"receivedDateTime ge {filterDate} and hasAttachments eq true";
-                var select = "id,subject,from,receivedDateTime,hasAttachments,parentFolderId";
-                var orderBy = "receivedDateTime desc";
-                
-                var messagesEndpoint = $"users/{HttpUtility.UrlEncode(AppSettings.TargetEmail)}/messages?" +
-                    $"$filter={HttpUtility.UrlEncode(filter)}&" +
-                    $"$select={select}&" +
-                    $"$orderby={orderBy}&" +
-                    $"$top=999";
-
-                var messagesResponse = _graphClient.GetPaged<GraphMessage>(messagesEndpoint);
-                var emails = messagesResponse.Value ?? new List<GraphMessage>();
-
-                log.Info($"Found {emails.Count} emails with attachments");
-
-                if (emails.Count == 0)
+                var allowedSenders = new HashSet<string>(emailList.Keys, StringComparer.OrdinalIgnoreCase);
+                if (allowedSenders.Count == 0)
                 {
-                    log.Info("No emails to process");
+                    Console.WriteLine("No allowed senders found — aborting process.");
                     return result;
                 }
 
-                // Get sent items folder to exclude sent emails
-                string sentFolderId = null;
-                try
-                {
-                    var sentFolder = _graphClient.Get<GraphFolder>($"users/{HttpUtility.UrlEncode(AppSettings.TargetEmail)}/mailFolders/sentitems");
-                    sentFolderId = sentFolder?.Id;
-                }
-                catch (Exception ex)
-                {
-                    log.Warn($"Could not get Sent Items folder: {ex.Message}");
-                }
+                Console.WriteLine($"Loaded {allowedSenders.Count} allowed senders/domains.");
 
-                // Filter out sent emails
-                var targetEmailLower = AppSettings.TargetEmail.ToLowerInvariant();
-                var incomingEmails = emails.Where(email => 
-                {
-                    // Exclude if in Sent Items folder
-                    if (!string.IsNullOrEmpty(sentFolderId) && email.ParentFolderId == sentFolderId)
-                        return false;
-                    
-                    // Exclude if sender is the target mailbox
-                    if (email.From?.EmailAddress?.Address?.ToLowerInvariant() == targetEmailLower)
-                        return false;
-                    
-                    return true;
-                }).ToList();
+                var blockedExtensions = ParseBlockedExtensions();
 
-                var filteredCount = emails.Count - incomingEmails.Count;
-                if (filteredCount > 0)
+                // Resolve folders
+                var importFolderId = GetFolderIdByDisplayName(AppSettings.InboxImportSubDir)
+                                     ?? GetFolderIdByDisplayName("Inbox");
+
+                if (string.IsNullOrEmpty(importFolderId))
                 {
-                    log.Info($"Filtered out {filteredCount} sent emails (processing only incoming emails)");
+                    Console.WriteLine("Could not resolve import folder.");
+                    return result;
                 }
 
-                result.EmailsProcessed = incomingEmails.Count;
-                
-                // Process each email
-                for (int i = 0; i < incomingEmails.Count; i++)
-                {
-                    var email = incomingEmails[i];
-                    log.Info($"\n--- Email {i + 1}/{incomingEmails.Count} ---");
-                    log.Info($"Subject: {email.Subject}");
-                    log.Info($"From: {email.From?.EmailAddress?.Address}");
-                    log.Info($"Date: {email.ReceivedDateTime:yyyy-MM-dd HH:mm:ss}");
+                // Fetch emails and attachments
+                var (_, messagesResponse) = await ReadEmailMessages(importFolderId);
 
-                    if (email.HasAttachments)
-                    {
-                        var attachmentResult = ProcessEmailAttachments(email);
-                        result.TotalAttachments += attachmentResult.Total;
-                        result.NewDownloads += attachmentResult.Downloaded;
-                        result.SkippedAttachments += attachmentResult.Skipped;
-                    }
-                }
+                var messages = messagesResponse?.Value?.ToList() ?? new List<Message>();
+                Console.WriteLine($"Found {messages.Count} messages with attachments in import folder.");
 
-                // Save tracking data
-                SaveTrackingData();
-                log.Info("Processing completed successfully");
+                if (messages.Count == 0)
+                    return result;
 
+                result.EmailsProcessed = messages.Count;
+
+                var processedIds = new List<string>();
+
+                await ProcessEmailAttachments(
+                    result,
+                    logDir,
+                    allowedSenders,
+                    blockedExtensions,
+                    messages,
+                    processedIds
+                );
+
+                // Move processed mails
+                //await MoveProcessedMails(oldFolderId, processedIds);
+
+
+                Console.WriteLine("Email processing completed successfully.");
             }
             catch (Exception ex)
             {
-                log.Error("Email processing failed", ex);
+                Console.WriteLine($"Email processing failed: {ex.Message}");
                 throw;
             }
 
             return result;
         }
 
-        private (int Total, int Downloaded, int Skipped) ProcessEmailAttachments(GraphMessage email)
+        private static string EnsureDirectoryExists(string path, string type)
         {
-            try
+            if (!Directory.Exists(path))
             {
-                var attachmentsEndpoint = $"users/{HttpUtility.UrlEncode(AppSettings.TargetEmail)}/messages/{email.Id}/attachments";
-                var attachmentsResponse = _graphClient.GetPaged<GraphAttachment>(attachmentsEndpoint);
-                var attachments = attachmentsResponse.Value ?? new List<GraphAttachment>();
+                Directory.CreateDirectory(path);
+                Console.WriteLine($"Created {type.ToLower()} directory: {path}");
+            }
+            return path;
+        }
+        private async Task<(string oldFolderId, MessageCollectionResponse messagesResp)> ReadEmailMessages(string importFolderId)
+        {
+            var oldFolderId = GetFolderIdByDisplayName(AppSettings.InboxOldSubDir) ?? importFolderId;
 
+            // Build filter for timeframe and attachments
+            var hoursAgo = DateTime.UtcNow.AddHours(-AppSettings.HoursToFetch);
+            var filter = $"receivedDateTime ge {hoursAgo:yyyy-MM-ddTHH:mm:ss.fffZ} and hasAttachments eq true";
+
+            // Query messages in the import folder via Graph SDK
+            var messagesResp = await _graphServiceClient.ReadEmailMessages(oldFolderId, filter);
+            return (oldFolderId, messagesResp);
+        }
+
+
+        private async Task ProcessEmailAttachments(
+            ProcessingResult result,
+            string logDir,
+            HashSet<string> allowedSenders,
+            HashSet<string> blockedExtensions,
+            List<Message> incomingMessages,
+            List<string> processedMessageIds)
+        {
+            Directory.CreateDirectory(AppSettings.OutputPathGood);
+
+            foreach (var message in incomingMessages)
+            {
+                if (!IsSenderAllowed(message, allowedSenders, out var sender))
+                    continue;
+
+                Console.WriteLine(
+                    $"\n--- Processing message: {message.Subject} From: {sender} Date: {message.ReceivedDateTime:yyyy-MM-dd HH:mm:ss}");
+
+                var attachments = await GetAttachmentsAsync(message.Id);
                 if (attachments.Count == 0)
                 {
-                    log.Info("  No attachments found");
-                    return (0, 0, 0);
+                    Console.WriteLine("  No attachments found");
+                    continue;
                 }
 
-                log.Info($"  Found {attachments.Count} attachment(s)");
-
-                // Ensure downloads directory exists
-                if (!Directory.Exists(AppSettings.DownloadsDirectory))
+                foreach (var attachment in attachments.OfType<FileAttachment>())
                 {
-                    Directory.CreateDirectory(AppSettings.DownloadsDirectory);
-                }
-
-                int downloaded = 0;
-                int skipped = 0;
-
-                foreach (var attachment in attachments)
-                {
-                    if (IsAttachmentProcessed(email.Id, attachment.Id))
+                    if (attachment.ContentBytes == null || IsAttachmentProcessed(message.Id, attachment.Id))
                     {
-                        log.Info($"    ⏭️  Skipped (already downloaded): {attachment.Name}");
-                        skipped++;
+                        LogSkippedAttachment(result, attachment.Name);
                         continue;
                     }
 
-                    if (!string.IsNullOrEmpty(attachment.ContentBytes))
-                    {
-                        var datePrefix = DateTime.Now.ToString("yyyy-MM-dd");
-                        var fileName = $"{datePrefix}_{attachment.Name}";
-                        var filePath = Path.Combine(AppSettings.DownloadsDirectory, fileName);
-
-                        var bytes = Convert.FromBase64String(attachment.ContentBytes);
-                        File.WriteAllBytes(filePath, bytes);
-
-                        MarkAttachmentProcessed(email.Id, attachment.Id, fileName);
-                        
-                        log.Info($"    ✅ Downloaded: {fileName} ({bytes.Length / 1024.0:F2} KB)");
-                        downloaded++;
-                    }
-                    else
-                    {
-                        log.Warn($"    ⚠️  Skipped: {attachment.Name} (no content available)");
-                    }
+                    HandleAttachmentAsync(result, logDir, sender, message.Id, attachment, blockedExtensions);
                 }
 
-                return (attachments.Count, downloaded, skipped);
-            }
-            catch (Exception ex)
-            {
-                log.Error($"  Error processing attachments: {ex.Message}", ex);
-                return (0, 0, 0);
+                processedMessageIds.Add(message.Id);
             }
         }
 
-        private TrackingData LoadTrackingData()
+        private static bool IsSenderAllowed(Message message, HashSet<string> allowedSenders, out string sender)
         {
+            sender = message.From?.EmailAddress?.Address?.ToLowerInvariant();
+            if (string.IsNullOrEmpty(sender) || !sender.Contains('@'))
+                return false;
+
+            var domain = sender.Substring(sender.LastIndexOf('@'));
+            return allowedSenders.Contains(sender) || allowedSenders.Contains(domain);
+        }
+
+        private async Task<IList<Attachment>> GetAttachmentsAsync(string messageId)
+        {
+            return await _graphServiceClient.GetAttachmentsAsync(messageId);
+        }
+
+        private static void LogSkippedAttachment(ProcessingResult result, string name)
+        {
+            Console.WriteLine($"Skipped (file already processed, not a file or no content): {name}");
+            result.SkippedAttachments++;
+        }
+
+        private void HandleAttachmentAsync(
+            ProcessingResult result,
+            string logDir,
+            string sender,
+            string messageId,
+            FileAttachment attachment,
+            HashSet<string> blockedExtensions)
+        {
+            var fileName = attachment.Name ?? "attachment";
+            var ext = Path.GetExtension(fileName).ToLowerInvariant();
+
+            if (blockedExtensions.Contains(ext))
+            {
+                LogBlockedAttachmentAsync(result, logDir, sender, fileName, ext);
+                return;
+            }
+
+            var targetPath = GetUniqueFilePath(AppSettings.OutputPathGood, fileName);
+            File.WriteAllBytes(targetPath, attachment.ContentBytes);
+
+            if (AppSettings.LogAttachments)
+            {
+                var logPath = Path.Combine(logDir, AppSettings.LogFileAttachments);
+                File.AppendAllText(logPath,
+                    $"{sender} {fileName} {DateTime.Now}{Environment.NewLine}");
+            }
+
+            MarkAttachmentProcessed(messageId, attachment.Id, fileName);
+            result.TotalAttachments++;
+            result.NewDownloads++;
+            Console.WriteLine($"Downloaded: {fileName} ({attachment.ContentBytes.Length / 1024.0:F2} KB)");
+        }
+
+        private static void LogBlockedAttachmentAsync(
+            ProcessingResult result,
+            string logDir,
+            string sender,
+            string fileName,
+            string ext)
+        {
+            // Don’t log common image files as blocked
+            if (!ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
+                !ext.Equals(".png", StringComparison.OrdinalIgnoreCase))
+            {
+                var blockedLogPath = Path.Combine(logDir, AppSettings.LogFileBlockedFiles);
+                File.AppendAllText(blockedLogPath,
+                    $"{sender} {fileName} {DateTime.Now}{Environment.NewLine}");
+            }
+
+            result.SkippedAttachments++;
+            Console.WriteLine($"Blocked by extension: {fileName}");
+        }
+
+        private static string GetUniqueFilePath(string directory, string fileName)
+        {
+            var targetPath = Path.Combine(directory, fileName);
+            if (!File.Exists(targetPath))
+                return targetPath;
+
+            var uniquePrefix = DateTime.Now.ToString("yyyyMMddHHmmssfff") + "_";
+            return Path.Combine(directory, uniquePrefix + fileName);
+        }
+
+        private async Task MoveProcessedMails(string oldFolderId, List<string> processedMessageIds)
+        {
+            foreach (var messageId in processedMessageIds)
+            {
+                try
+                {
+                    var moveBody = new MovePostRequestBody { DestinationId = oldFolderId };
+                    await _graphServiceClient.MoveProcessedMails(messageId, moveBody);
+                    Console.WriteLine($"Moved message {messageId} to folder id {oldFolderId}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Failed to move message {messageId}: {ex.Message}");
+                }
+            }
+        }
+
+        private HashSet<string> LoadAllowedSenders()
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             try
             {
-                if (File.Exists(AppSettings.TrackingFile))
+                var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Emails.xml");
+                if (!File.Exists(path))
                 {
-                    var json = File.ReadAllText(AppSettings.TrackingFile);
-                    if (string.IsNullOrWhiteSpace(json))
+                    Console.WriteLine($"Emails.xml not found at {path}");
+                    return set;
+                }
+
+                var doc = new XmlDocument();
+                doc.Load(path);
+
+                foreach (XmlNode node in doc.SelectNodes("//*"))
+                {
+                    var text = node.InnerText?.Trim();
+                    if (string.IsNullOrEmpty(text)) continue;
+
+                    var lower = text.ToLowerInvariant();
+                    var parts = lower.Split(new[] { ',', ';', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var p in parts)
                     {
-                        return new TrackingData();
+                        var v = p.Trim();
+                        if (string.IsNullOrEmpty(v)) continue;
+                        if (v.StartsWith("@") || v.Contains("@"))
+                            set.Add(v);
+                        else
+                            set.Add(v);
                     }
-                    
-                    var data = JsonConvert.DeserializeObject<TrackingData>(json);
-                    log.Info($"Loaded tracking data: {data.Attachments.Count} attachments previously processed");
-                    return data;
                 }
             }
             catch (Exception ex)
             {
-                log.Warn($"Failed to load tracking file, using empty state: {ex.Message}");
+                Console.WriteLine($"Failed to load Emails.xml: {ex.Message}");
             }
-            
-            return new TrackingData();
+
+            return set;
         }
 
+        private HashSet<string> ParseBlockedExtensions()
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var raw = AppSettings.BlockedFiles ?? string.Empty;
+                var parts = raw.Split(new[] { ',', ';', '.' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (var p in parts)
+                {
+                    var ext = p.Trim().ToLowerInvariant();
+                    if (!ext.StartsWith(".")) ext = "." + ext;
+                    set.Add(ext);
+                }
+            }
+            catch
+            {
+            }
+
+            return set;
+        }
+
+        private string GetFolderIdByDisplayName(string displayName)
+        {
+            return _graphServiceClient.GetFolderIdByDisplayName(displayName);
+        }
+
+        //Todo: Save data using file hashes instead.
         private void SaveTrackingData()
         {
             try
             {
-                var json = JsonConvert.SerializeObject(_trackingData, Formatting.Indented);
+                var json = JsonSerializer.Serialize(_trackingData);
                 File.WriteAllText(AppSettings.TrackingFile, json);
-                log.Info("Tracking data saved successfully");
+                Console.WriteLine("Tracking data saved successfully");
             }
             catch (Exception ex)
             {
-                log.Error($"Failed to save tracking file: {ex.Message}", ex);
+                Console.WriteLine($"Failed to save tracking file: {ex.Message}", ex);
             }
-        }
-
-        private bool IsAttachmentProcessed(string emailId, string attachmentId)
-        {
-            var key = $"{emailId}_{attachmentId}";
-            return _trackingData.Attachments.ContainsKey(key);
         }
 
         private void MarkAttachmentProcessed(string emailId, string attachmentId, string fileName)
@@ -283,6 +349,14 @@ namespace EmailAutomationLegacy.Services
                 DownloadedAt = DateTime.UtcNow,
                 EmailId = emailId
             };
+            SaveTrackingData();
         }
+
+        private bool IsAttachmentProcessed(string emailId, string attachmentId)
+        {
+            var key = $"{emailId}_{attachmentId}";
+            return _trackingData.Attachments.ContainsKey(key);
+        }
+
     }
 }

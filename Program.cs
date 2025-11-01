@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Configuration;
 using System.IO;
-using System.Threading;
+using System.Threading.Tasks;
+using EmailAutomationLegacy.Models;
 using EmailAutomationLegacy.Services;
+using System.Text.Json;
 
 namespace EmailAutomationLegacy
 {
@@ -10,7 +13,7 @@ namespace EmailAutomationLegacy
     {
         private static readonly log4net.ILog log = log4net.LogManager.GetLogger(typeof(Program));
 
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             try
             {
@@ -29,21 +32,13 @@ namespace EmailAutomationLegacy
 
                 // Initialize services
                 var tokenManager = new TokenManager();
-                var emailProcessor = new EmailProcessor(tokenManager);
+                var trackingData = LoadTrackingData();  
+                var emailProcessor = new EmailProcessor(new GraphClient(tokenManager), trackingData);
 
-                // Test connection first
-                Console.WriteLine("🔍 Testing connection...");
-                if (!emailProcessor.TestConnection())
-                {
-                    Console.WriteLine("❌ Connection test failed. Exiting.");
-                    Environment.Exit(1);
-                }
-
-                Console.WriteLine("✅ Connection successful!");
                 Console.WriteLine("📧 Starting email processing...");
 
                 // Process emails
-                var result = emailProcessor.ProcessEmails();
+                var result = await emailProcessor.ProcessEmailsWithGraphAsync(new Dictionary<string, string>(), "");
                 
                 // Display results
                 Console.WriteLine("\n" + new string('=', 60));
@@ -101,6 +96,31 @@ namespace EmailAutomationLegacy
             }
 
             return true;
+        }
+        
+        private static ProcessedEmailAttachmentTracker LoadTrackingData()
+        {
+            try
+            {
+                if (File.Exists(AppSettings.TrackingFile))
+                {
+                    var json = File.ReadAllText(AppSettings.TrackingFile);
+                    if (string.IsNullOrWhiteSpace(json))
+                    {
+                        return new ProcessedEmailAttachmentTracker();
+                    }
+
+                    var data = JsonSerializer.Deserialize<ProcessedEmailAttachmentTracker>(json);
+                    Console.WriteLine($"Loaded tracking data: {data.Attachments.Count} attachments previously processed");
+                    return data;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to load tracking file, using empty state: {ex.Message}");
+            }
+
+            return new ProcessedEmailAttachmentTracker();
         }
     }
 }
